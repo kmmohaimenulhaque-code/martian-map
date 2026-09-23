@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 
 
 class USGSMarsGazetteer:
@@ -42,15 +43,48 @@ class USGSMarsGazetteer:
 
     @staticmethod
     def normalize_longitude(longitude: float) -> float:
+        """Normalize longitude to the [0, 360) convention used by the dataset."""
         return float(longitude) % 360.0
 
+    @staticmethod
+    def _json_safe_value(value):
+        """Convert pandas/NumPy missing values and scalars to JSON-safe values."""
+        if value is None:
+            return None
+
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except (ValueError, TypeError):
+                pass
+
+        return value
+
+    @classmethod
+    def _row_to_dict(cls, row) -> dict:
+        """Convert a GeoDataFrame row into a JSON-safe dictionary."""
+        values = row.drop(labels=["geometry"]).to_dict()
+
+        return {
+            key: cls._json_safe_value(value)
+            for key, value in values.items()
+        }
+
     def all(self) -> tuple[dict, ...]:
+        """Return all registered USGS Mars nomenclature features."""
         return tuple(
-            row.drop(labels=["geometry"]).to_dict()
+            self._row_to_dict(row)
             for _, row in self.data.iterrows()
         )
 
     def find(self, name: str) -> tuple[dict, ...]:
+        """Find registered features whose names contain the supplied text."""
         needle = name.strip().lower()
 
         if not needle:
@@ -63,9 +97,69 @@ class USGSMarsGazetteer:
         )
 
         return tuple(
-            row.drop(labels=["geometry"]).to_dict()
+            self._row_to_dict(row)
             for _, row in self.data[mask].iterrows()
         )
+
+    def nearest(
+        self,
+        latitude: float,
+        longitude: float,
+    ) -> dict | None:
+        """Return the nearest registered USGS Mars feature."""
+
+        if not -90.0 <= latitude <= 90.0:
+            raise ValueError("latitude must be between -90 and 90")
+
+        longitude = self.normalize_longitude(longitude)
+
+        # Mars spherical approximation for fast spatial lookup.
+        import numpy as np
+
+        radius_m = 3_389_500.0
+
+        lat1 = np.radians(latitude)
+
+        lat2 = np.radians(
+            self.data["latitude_deg"].to_numpy()
+        )
+
+        lon1 = np.radians(longitude)
+
+        lon2 = np.radians(
+            self.data["longitude_deg"].to_numpy()
+        )
+
+        dlat = lat2 - lat1
+
+        dlon = (
+            (lon2 - lon1 + np.pi) % (2 * np.pi)
+            - np.pi
+        )
+
+        a = (
+            np.sin(dlat / 2) ** 2
+            + np.cos(lat1)
+            * np.cos(lat2)
+            * np.sin(dlon / 2) ** 2
+        )
+
+        distances_km = (
+            2
+            * radius_m
+            * np.arcsin(np.sqrt(a))
+            / 1000.0
+        )
+
+        index = int(np.argmin(distances_km))
+
+        row = self.data.iloc[index]
+
+        result = self._row_to_dict(row)
+
+        result["distance_km"] = float(distances_km[index])
+
+        return result
 
     def nearby(
         self,
@@ -87,6 +181,7 @@ class USGSMarsGazetteer:
         import numpy as np
 
         radius_m = 3_389_500.0
+
         lat1 = np.radians(latitude)
 
         lat2 = np.radians(
@@ -94,12 +189,17 @@ class USGSMarsGazetteer:
         )
 
         lon1 = np.radians(longitude)
+
         lon2 = np.radians(
             self.data["longitude_deg"].to_numpy()
         )
 
         dlat = lat2 - lat1
-        dlon = (lon2 - lon1 + np.pi) % (2 * np.pi) - np.pi
+
+        dlon = (
+            (lon2 - lon1 + np.pi) % (2 * np.pi)
+            - np.pi
+        )
 
         a = (
             np.sin(dlat / 2) ** 2
@@ -124,11 +224,16 @@ class USGSMarsGazetteer:
         for index in indices:
             row = self.data.iloc[index]
 
-            item = row.drop(labels=["geometry"]).to_dict()
-            item["distance_km"] = float(distances_km[index])
+            item = self._row_to_dict(row)
+
+            item["distance_km"] = float(
+                distances_km[index]
+            )
 
             results.append(item)
 
-        results.sort(key=lambda item: item["distance_km"])
+        results.sort(
+            key=lambda item: item["distance_km"]
+        )
 
         return tuple(results)
