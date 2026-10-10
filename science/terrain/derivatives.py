@@ -4,125 +4,224 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from science.terrain.mola_terrain import TerrainWindow
+from science.terrain.mola128_window import TerrainWindow as MOLA128TerrainWindow
 
 
-MARS_RADIUS_M = 3_389_500.0
+MARS_RADIUS_M = 3_396_000.0
 
 
 @dataclass(frozen=True)
 class TerrainDerivatives:
-    """Terrain quantities derived from a local MOLA elevation window."""
+    slope_deg: np.ndarray
+    aspect_deg: np.ndarray
+    roughness_m: np.ndarray
+
+    @property
+    def center_slope_deg(self) -> float:
+        rows, cols = self.slope_deg.shape
+        return float(self.slope_deg[rows // 2, cols // 2])
+
+    @property
+    def center_aspect_deg(self) -> float:
+        rows, cols = self.aspect_deg.shape
+        return float(self.aspect_deg[rows // 2, cols // 2])
+
+    @property
+    def center_roughness_m(self) -> float:
+        rows, cols = self.roughness_m.shape
+        return float(self.roughness_m[rows // 2, cols // 2])
+
+
+@dataclass(frozen=True)
+class LegacyTerrainDerivatives:
+    """
+    Backward-compatible scalar derivatives for the existing
+    MarsEnvironmentEngine terrain assessment.
+    """
 
     slope_deg: float
     aspect_deg: float
     roughness_m: float
 
 
-def _metres_per_degree(latitude_deg: float) -> tuple[float, float]:
-    """
-    Approximate Mars surface distance represented by one degree.
+class MOLA128Derivatives:
+    def __init__(
+        self,
+        mars_radius_m: float = MARS_RADIUS_M,
+    ):
+        self.mars_radius_m = float(mars_radius_m)
 
-    Returns
-    -------
-    (dx, dy)
-        East-west and north-south metres per degree.
-    """
-    latitude_rad = np.deg2rad(latitude_deg)
+    def compute(
+        self,
+        window: MOLA128TerrainWindow,
+    ) -> TerrainDerivatives:
+        elevation = window.elevations_m.astype(np.float64)
 
-    metres_per_degree = (
-        2.0 * np.pi * MARS_RADIUS_M / 360.0
-    )
+        if elevation.shape[0] < 3 or elevation.shape[1] < 3:
+            raise ValueError(
+                "Terrain window must be at least 3x3 "
+                "for derivative calculation."
+            )
 
-    dx = metres_per_degree * np.cos(latitude_rad)
-    dy = metres_per_degree
+        latitudes_deg = np.asarray(
+            window.latitudes_deg,
+            dtype=np.float64,
+        )
 
-    return dx, dy
+        longitudes_deg = np.asarray(
+            window.longitudes_deg,
+            dtype=np.float64,
+        )
+
+        center_latitude_deg = float(
+            window.center_latitude_deg
+        )
+
+        return self._compute(
+            elevation=elevation,
+            latitudes_deg=latitudes_deg,
+            longitudes_deg=longitudes_deg,
+            center_latitude_deg=center_latitude_deg,
+        )
+
+    def _compute(
+        self,
+        *,
+        elevation: np.ndarray,
+        latitudes_deg: np.ndarray,
+        longitudes_deg: np.ndarray,
+        center_latitude_deg: float,
+    ) -> TerrainDerivatives:
+        lat_rad = np.radians(latitudes_deg)
+        lon_rad = np.radians(longitudes_deg)
+
+        north_m = (
+            self.mars_radius_m * lat_rad
+        )
+
+        center_lat_rad = np.radians(
+            center_latitude_deg
+        )
+
+        east_m = (
+            self.mars_radius_m
+            * np.cos(center_lat_rad)
+            * lon_rad
+        )
+
+        dz_d_north, dz_d_east = np.gradient(
+            elevation,
+            north_m,
+            east_m,
+            axis=(0, 1),
+        )
+
+        gradient_magnitude = np.hypot(
+            dz_d_north,
+            dz_d_east,
+        )
+
+        slope_deg = np.degrees(
+            np.arctan(gradient_magnitude)
+        )
+
+        downhill_north = -dz_d_north
+        downhill_east = -dz_d_east
+
+        aspect_deg = (
+            np.degrees(
+                np.arctan2(
+                    downhill_east,
+                    downhill_north,
+                )
+            )
+            + 360.0
+        ) % 360.0
+
+        padded = np.pad(
+            elevation,
+            1,
+            mode="edge",
+        )
+
+        neighborhoods = (
+            np.lib.stride_tricks.sliding_window_view(
+                padded,
+                (3, 3),
+            )
+        )
+
+        roughness_m = neighborhoods.std(
+            axis=(-2, -1)
+        )
+
+        return TerrainDerivatives(
+            slope_deg=slope_deg,
+            aspect_deg=aspect_deg,
+            roughness_m=roughness_m,
+        )
 
 
 def calculate_derivatives(
-    window: TerrainWindow,
-) -> TerrainDerivatives:
+    window,
+) -> LegacyTerrainDerivatives:
     """
-    Calculate terrain derivatives at the centre of a MOLA window.
+    Backward-compatible derivative calculation for the
+    existing MolaNetCDFSampler terrain assessment.
 
-    The centre must have neighbours on all four sides.
+    The legacy sampler exposes:
+        center_latitude
+        latitudes
+        longitudes
+        elevations_m
+        spacing_deg
+
+    Returns scalar center-cell values because the existing
+    environment API expects JSON-safe site morphology values.
     """
 
-    elevation = window.elevations_m
+    elevation = np.asarray(
+        window.elevations_m,
+        dtype=np.float64,
+    )
 
-    if elevation.ndim != 2:
-        raise ValueError("elevation grid must be two-dimensional")
-
-    rows, columns = elevation.shape
-
-    if rows < 3 or columns < 3:
+    if elevation.shape[0] < 3 or elevation.shape[1] < 3:
         raise ValueError(
-            "terrain window must contain at least a 3x3 grid"
+            "Terrain window must be at least 3x3 "
+            "for derivative calculation."
         )
 
-    centre_row = rows // 2
-    centre_column = columns // 2
+    latitudes = np.asarray(
+        window.latitudes,
+        dtype=np.float64,
+    )
 
-    if (
-        centre_row == 0
-        or centre_row == rows - 1
-        or centre_column == 0
-        or centre_column == columns - 1
-    ):
-        raise ValueError(
-            "terrain centre must have neighbours on all sides"
-        )
+    longitudes = np.asarray(
+        window.longitudes,
+        dtype=np.float64,
+    )
 
-    spacing_deg = window.spacing_deg
-
-    dx_per_degree, dy_per_degree = _metres_per_degree(
+    center_latitude = float(
         window.center_latitude
     )
 
-    dx = dx_per_degree * spacing_deg
-    dy = dy_per_degree * spacing_deg
-
-    dz_dx = (
-        elevation[centre_row, centre_column + 1]
-        - elevation[centre_row, centre_column - 1]
-    ) / (2.0 * dx)
-
-    dz_dy = (
-        elevation[centre_row - 1, centre_column]
-        - elevation[centre_row + 1, centre_column]
-    ) / (2.0 * dy)
-
-    slope_rad = np.arctan(
-        np.sqrt(dz_dx**2 + dz_dy**2)
+    derivatives = MOLA128Derivatives()._compute(
+        elevation=elevation,
+        latitudes_deg=latitudes,
+        longitudes_deg=longitudes,
+        center_latitude_deg=center_latitude,
     )
 
-    slope_deg = float(np.rad2deg(slope_rad))
+    centre = elevation.shape[0] // 2
 
-    # Aspect convention:
-    #   0°   = north
-    #   90°  = east
-    #   180° = south
-    #   270° = west
-    #
-    # atan2(eastward, northward) gives clockwise-from-north.
-    aspect_deg = float(
-        np.rad2deg(
-            np.arctan2(dz_dx, dz_dy)
-        ) % 360.0
-    )
-
-    local_patch = elevation[
-        centre_row - 1 : centre_row + 2,
-        centre_column - 1 : centre_column + 2,
-    ]
-
-    roughness_m = float(
-        local_patch.max() - local_patch.min()
-    )
-
-    return TerrainDerivatives(
-        slope_deg=slope_deg,
-        aspect_deg=aspect_deg,
-        roughness_m=roughness_m,
+    return LegacyTerrainDerivatives(
+        slope_deg=float(
+            derivatives.slope_deg[centre, centre]
+        ),
+        aspect_deg=float(
+            derivatives.aspect_deg[centre, centre]
+        ),
+        roughness_m=float(
+            derivatives.roughness_m[centre, centre]
+        ),
     )
