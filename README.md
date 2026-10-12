@@ -169,6 +169,7 @@ Google Gemini
       ↓
 AI interpretation of structured results
 ```
+```mermaid
 flowchart TB
     USER["Mission operator"] --> APP
 
@@ -310,6 +311,7 @@ flowchart TB
 
     ROUTING -. "Deterministic route metrics remain authoritative" .-> INTELUI
     ENV -. "Scientific context and evidence status" .-> OPSUI
+```
 # Stack
 
 # Frontend
