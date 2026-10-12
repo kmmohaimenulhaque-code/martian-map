@@ -312,6 +312,7 @@ flowchart TB
     ROUTING -. "Deterministic route metrics remain authoritative" .-> INTELUI
     ENV -. "Scientific context and evidence status" .-> OPSUI
 ```
+# Simplified Architecture
 
 ```mermaid
 flowchart TB
