@@ -47,3 +47,7 @@ node frontend/e2e/devices.mjs                               # needs the server o
   syncs all maps.
 - Layouts: cockpit at >= 768 px; phones < 768 px use the 2-row HUD (<= 88 px), dock and bottom sheets.
   Keep `e2e/devices.mjs` green on desktop, iPads, iPhone 393 and Android 360.
+
+## Always-on skills
+- Skills live in `.claude/skills/` (graphify, ponytail and its review/audit/debt/gain/help skills).
+- Apply `ponytail` (full) on every coding task; use `graphify` for codebase questions (CLI: `uv tool install graphifyy`).
