@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { routeLabel } from "./routeLabel.js";
 
 /*
  * MARS INTELLIGENCE
@@ -232,7 +231,6 @@ export default function MarsIntelligence({ open, onClose, status, onAsk, mission
             elapsed: reply.elapsed_ms ?? null,
             model: reply.model,
             notice: reply.model_notice ?? null,
-            route: routeLabel(reply),
           },
         ]);
       } else {
@@ -261,7 +259,7 @@ export default function MarsIntelligence({ open, onClose, status, onAsk, mission
             <h2>MARS INTELLIGENCE</h2>
             <small>
               {status?.configured
-                ? `${status.model}${status.router?.providers?.qwen?.healthy ? ` + ${status.router.providers.qwen.model}` : ""} · ${status.tools?.length ?? 0} tools · ${status.knowledge?.chunks ?? 0} knowledge sections`
+                ? `${status.model} · ${status.tools?.length ?? 0} tools · ${status.knowledge?.chunks ?? 0} knowledge sections`
                 : "GEMINI_API_KEY is not configured on the server"}
             </small>
           </div>
@@ -353,7 +351,6 @@ export default function MarsIntelligence({ open, onClose, status, onAsk, mission
                   ))}
                 </div>
               )}
-              {message.route && <div className="intel-route" title={message.route.title}>{message.route.text}</div>}
               {message.role === "assistant" && !message.error && (
                 <div className="intel-foot">
                   <small className="intel-note">
